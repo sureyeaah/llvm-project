@@ -14,6 +14,7 @@ set(LLVM_LINK_COMPONENTS
 add_clang_library(clangDaemonTweaks OBJECT
   RawStringLiteral.cpp
   SwapIfBranches.cpp
+  ExtractVariable.cpp
 
   LINK_LIBS
   clangAST
