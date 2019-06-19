@@ -15,6 +15,7 @@ add_clang_library(clangDaemonTweaks OBJECT
   DumpAST.cpp
   RawStringLiteral.cpp
   SwapIfBranches.cpp
+  ExtractVariable.cpp
 
   LINK_LIBS
   clangAST
