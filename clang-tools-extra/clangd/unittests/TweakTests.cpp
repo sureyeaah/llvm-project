@@ -277,6 +277,209 @@ TEST(TweakTest, DumpRecordLayout) {
   const char *Input = "struct ^X { int x; int y; }";
   EXPECT_THAT(getMessage(ID, Input), ::testing::HasSubstr("0 |   int x"));
 }
+TEST(TweakTest, ExtractVariable) {
+  llvm::StringLiteral ID = "ExtractVariable";
+  checkAvailable(ID, R"cpp(
+    int xyz() {
+      return 1;
+    }
+    void f() {
+      int a = 5 + [[4 * [[^xyz()]]]];
+      // FIXME: add test case for multiple variable initialization once
+      // SelectionTree commonAncestor bug is fixed
+      switch(a) {
+        case 1: {
+          a = ^1;
+          break;
+        }
+        default: {
+          a = ^3; 
+        }
+      }
+      if(^1) {}
+      if(a < ^3)
+        if(a == 4)
+          a = 5;
+        else
+          a = 6;
+      else if (a < 4) {
+        a = ^4;
+      }
+      else {
+        a = ^5;
+      }
+      // for loop testing
+      for(a = ^1; a > ^3+^4; a++) 
+        a = 2;
+      // while testing
+      while(a < ^1) {
+        ^a++;
+      }
+      // do while testing
+      do
+        a = 1;
+      while(a < ^3);
+    }
+  )cpp");
+  checkNotAvailable(ID, R"cpp(
+    void f(int b = ^1) {
+      int a = 5 + 4 * 3;
+      // switch testing
+      switch(a) {
+        case 1: 
+          a = ^1;
+          break;
+        default:
+          a = ^3; 
+      }
+      // if testing
+      if(a < 3)
+        if(a == ^4)
+          a = ^5;
+        else
+          a = ^6;
+      else if (a < ^4) {
+        a = 4;
+      }
+      else {
+        a = 5;
+      }
+      // for loop testing
+      for(int a = 1, b = 2, c = 3; ^a > ^b ^+ ^c; ^a++) 
+        a = ^2;
+      // while testing
+      while(a < 1) {
+        a++;
+      }
+      // do while testing
+      do
+        a = ^1;
+      while(a < 3);
+      // testing in cases where braces are required
+      if (true)
+        do
+          a = 1;
+        while(a < ^1);
+      // check whether extraction breaks scope
+      int a = 1, b = ^a + 1;
+    }
+  )cpp");
+  // vector of pairs of input and output strings
+  const std::vector<std::pair<llvm::StringLiteral, llvm::StringLiteral>>
+      InputOutputs = {
+          // extraction from variable declaration/assignment
+          {R"cpp(void varDecl() {
+                   int a = 5 * (4 + (3 [[- 1)]]);
+                 })cpp",
+           R"cpp(void varDecl() {
+                   auto dummy = (3 - 1); int a = 5 * (4 + dummy);
+                 })cpp"},
+          // extraction from for loop init/cond/incr
+          {R"cpp(void forLoop() {
+                   for(int a = 1; a < ^3; a++) {
+                     a = 5 + 4 * 3;
+                   }
+                 })cpp",
+           R"cpp(void forLoop() {
+                   auto dummy = 3; for(int a = 1; a < dummy; a++) {
+                     a = 5 + 4 * 3;
+                   }
+                 })cpp"},
+          // extraction inside for loop body
+          {R"cpp(void forBody() {
+                   for(int a = 1; a < 3; a++) {
+                     a = 5 + [[4 * 3]];
+                   }
+                 })cpp",
+           R"cpp(void forBody() {
+                   for(int a = 1; a < 3; a++) {
+                     auto dummy = 4 * 3; a = 5 + dummy;
+                   }
+                 })cpp"},
+          // extraction inside while loop condition
+          {R"cpp(void whileLoop(int a) {
+                   while(a < 5 + [[4 * 3]]) 
+                     a += 1;
+                 })cpp",
+           R"cpp(void whileLoop(int a) {
+                   auto dummy = 4 * 3; while(a < 5 + dummy) 
+                     a += 1;
+                 })cpp"},
+          // extraction inside while body condition
+          {R"cpp(void whileBody(int a) {
+                   while(a < 1) {
+                     a += ^7 * 3;
+                   }
+                 })cpp",
+           R"cpp(void whileBody(int a) {
+                   while(a < 1) {
+                     auto dummy = 7; a += dummy * 3;
+                   }
+                 })cpp"},
+          // extraction inside do-while loop condition
+          {R"cpp(void doWhileLoop(int a) {
+                   do
+                     a += 3;
+                   while(a < ^1);
+                 })cpp",
+           R"cpp(void doWhileLoop(int a) {
+                   auto dummy = 1; do
+                     a += 3;
+                   while(a < dummy);
+                 })cpp"},
+          // extraction inside do-while body
+          {R"cpp(void doWhileBody(int a) {
+                   do {
+                     a += ^3;
+                   }
+                   while(a < 1);
+                 })cpp",
+           R"cpp(void doWhileBody(int a) {
+                   do {
+                     auto dummy = 3; a += dummy;
+                   }
+                   while(a < 1);
+                 })cpp"},
+          // extraction inside switch condition
+          {R"cpp(void switchLoop(int a) {
+                   switch(a = 1 + [[3 * 5]]) {
+                     default:
+                       break;
+                   }
+                 })cpp",
+           R"cpp(void switchLoop(int a) {
+                   auto dummy = 3 * 5; switch(a = 1 + dummy) {
+                     default:
+                       break;
+                   }
+                 })cpp"},
+          // extraction inside case body
+          {R"cpp(void caseBody(int a) {
+                   switch(1) {
+                     case 1: {
+                       a = ^1;
+                       break;
+                     }
+                     default:
+                       break;
+                   }
+                 })cpp",
+           R"cpp(void caseBody(int a) {
+                   switch(1) {
+                     case 1: {
+                       auto dummy = 1; a = dummy;
+                       break;
+                     }
+                     default:
+                       break;
+                   }
+                 })cpp"},
+      };
+  for (const auto &IO : InputOutputs) {
+    checkTransform(ID, IO.first, IO.second);
+  }
+
+}
 
 } // namespace
 } // namespace clangd
