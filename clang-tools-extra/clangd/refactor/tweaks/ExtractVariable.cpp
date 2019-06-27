@@ -153,7 +153,14 @@ static bool extractionAllowed(const Stmt *ParStmt, const SelectionTree::Node *N,
 // We have a special case for the Case Stmt constant for which we currently
 // don't offer extraction.
 //
-// we also check if doing the extraction will take a variable out of scope
+// If doing the extraction will take a variable out of scope, we give up
+//
+// If we encounter a LambdaExpr (i.e. we are trying to extract a capture/default
+// param argument), we give up. Note that the whole LambdaExpr can still be
+// extracted.
+//
+// If we encounter a CXXMethodDecl (implying that the selected expression is a
+// default argument for a method parameter), we give up
 static const clang::Stmt *getStmt(const SelectionTree::Node *N,
                                   const SourceManager &M) {
   auto CurN = N;
@@ -172,7 +179,12 @@ static const clang::Stmt *getStmt(const SelectionTree::Node *N,
       // give up if extraction will take a variable out of scope
       if (!extractionAllowed(ParStmt, N, M))
         break;
+      // Prevent extraction from lambda captures and params
+      if (isa<LambdaExpr>(ParStmt))
+        break;
     }
+    else if (CurN->Parent->ASTNode.get<CXXMethodDecl>())
+      break;
     CurN = CurN->Parent;
   }
   return nullptr;

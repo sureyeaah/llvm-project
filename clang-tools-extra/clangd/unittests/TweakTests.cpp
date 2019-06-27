@@ -261,6 +261,11 @@ TEST(TweakTest, ExtractVariable) {
     }
   )cpp");
   checkNotAvailable(ID, R"cpp(
+    void g() {
+      class T {
+        void f(int a = ^1) {}
+      };
+    }
     void f(int b = ^1) {
       int a = 5 + 4 * 3;
       // switch testing
@@ -301,6 +306,8 @@ TEST(TweakTest, ExtractVariable) {
         while(a < ^1);
       // check whether extraction breaks scope
       int a = 1, b = ^a + 1;
+      // lambda testing
+      auto lam = [&^a](int p = ^1) {};
     }
   )cpp");
   // vector of pairs of input and output strings
@@ -417,7 +424,6 @@ TEST(TweakTest, ExtractVariable) {
   for (const auto &IO : InputOutputs) {
     checkTransform(ID, IO.first, IO.second);
   }
-
 }
 
 } // namespace
