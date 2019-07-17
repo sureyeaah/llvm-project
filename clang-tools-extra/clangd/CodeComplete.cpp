@@ -57,6 +57,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
@@ -993,6 +994,19 @@ private:
     if (ReturnType) {
       Signature.label += " -> ";
       Signature.label += ReturnType;
+    }
+    if(const CXXMethodDecl* MethodDecl = dyn_cast_or_null<CXXMethodDecl>(Candidate.getFunction())) {
+      const CXXRecordDecl* RecDecl = MethodDecl->getParent();
+      if(RecDecl && RecDecl->isLambda()) {
+        llvm::errs() << "here: ";
+        auto pre = RecDecl->getPreviousDecl();
+        if(pre) pre->dump();
+        const NamedDecl* LambdaDecl = dyn_cast_or_null<NamedDecl>(RecDecl->getPreviousDecl());
+        if(LambdaDecl && LambdaDecl->getIdentifier()) {
+          LambdaDecl->dump();
+          llvm::errs() << LambdaDecl->getName();
+        }
+      }
     }
     dlog("Signal for {0}: {1}", Signature, Signal);
     ScoredSignature Result;
