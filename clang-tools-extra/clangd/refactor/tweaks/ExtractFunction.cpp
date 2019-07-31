@@ -425,17 +425,6 @@ CapturedZoneInfo captureZoneInfo(const ExtractionZone &ExtZone) {
       return true;
     }
 
-    // FIXME: check for broken break/continue only.
-    bool VisitBreakStmt(BreakStmt *Break) { // NOLINT
-      if (isStmtInExtractionZone(Break, ExtZone))
-        Info.HasBreakOrContinue = true;
-      return true;
-    }
-    bool VisitContinueStmt(ContinueStmt *Continue) { // NOLINT
-      if (isStmtInExtractionZone(Continue, ExtZone))
-        Info.HasBreakOrContinue= true;
-      return true;
-    }
     CapturedZoneInfo Info;
     const ExtractionZone &ExtZone;
   };
