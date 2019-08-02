@@ -38,7 +38,7 @@ public:
       : SelBegin(SelBegin), SelEnd(SelEnd) {
     // Extract bounds and selected-ness for all tokens spelled in the file.
     Tokens.reserve(Spelled.size());
-    for (const auto& Tok : Spelled) {
+    for (const auto &Tok : Spelled) {
       // As well as comments, don't count semicolons as real tokens.
       // They're not properly claimed as expr-statement is missing from the AST.
       if (Tok.kind() == tok::comment || Tok.kind() == tok::semi)
@@ -77,9 +77,8 @@ public:
     bool PartialSelection = false;
 
     // Find the first token that (maybe) overlaps the claimed range.
-    auto Start = llvm::partition_point(Tokens, [&](const TokInfo &Tok) {
-      return Tok.EndOffset <= Begin;
-    });
+    auto Start = llvm::partition_point(
+        Tokens, [&](const TokInfo &Tok) { return Tok.EndOffset <= Begin; });
     // Iterate over every token that overlaps the range.
     // Claim selected tokens, and update the two result flags.
     for (auto It = Start; It != Tokens.end() && It->StartOffset < End; ++It) {
@@ -333,6 +332,7 @@ private:
     if (N.Selected || !N.Children.empty()) {
       // Attach to the tree.
       N.Parent->Children.push_back(&N);
+      N.checkSubtreeCompletelySelected();
     } else {
       // Neither N any children are selected, it doesn't belong in the tree.
       assert(&N == &Nodes.back());
@@ -422,6 +422,7 @@ void SelectionTree::print(llvm::raw_ostream &OS, const SelectionTree::Node &N,
                                                                     : '.');
   else
     OS.indent(Indent);
+  llvm::errs() << "\n" << N.IsSubtreeEntirelySelected << "\n";
   printNodeKind(OS, N.ASTNode);
   OS << ' ';
   N.ASTNode.print(OS, PrintPolicy);
@@ -474,6 +475,7 @@ SelectionTree::SelectionTree(ASTContext &AST, const syntax::TokenBuffer &Tokens,
   Nodes = SelectionVisitor::collect(AST, Tokens, PrintPolicy, Begin, End, FID);
   Root = Nodes.empty() ? nullptr : &Nodes.front();
   dlog("Built selection tree\n{0}", *this);
+  print(llvm::errs(), *Root, 10);
 }
 
 SelectionTree::SelectionTree(ASTContext &AST, const syntax::TokenBuffer &Tokens,
@@ -490,10 +492,10 @@ const Node *SelectionTree::commonAncestor() const {
   return Ancestor != Root ? Ancestor : nullptr;
 }
 
-const DeclContext& SelectionTree::Node::getDeclContext() const {
-  for (const Node* CurrentNode = this; CurrentNode != nullptr;
+const DeclContext &SelectionTree::Node::getDeclContext() const {
+  for (const Node *CurrentNode = this; CurrentNode != nullptr;
        CurrentNode = CurrentNode->Parent) {
-    if (const Decl* Current = CurrentNode->ASTNode.get<Decl>()) {
+    if (const Decl *Current = CurrentNode->ASTNode.get<Decl>()) {
       if (CurrentNode != this)
         if (auto *DC = dyn_cast<DeclContext>(Current))
           return *DC;
@@ -508,6 +510,40 @@ const SelectionTree::Node &SelectionTree::Node::ignoreImplicit() const {
       Children.front()->ASTNode.getSourceRange() == ASTNode.getSourceRange())
     return Children.front()->ignoreImplicit();
   return *this;
+}
+
+void SelectionTree::Node::checkSubtreeCompletelySelected() {
+  // If node is entirely selected, subtree is entirely selected as well.
+  if (Selected == SelectionTree::Complete) {
+    IsSubtreeEntirelySelected = true;
+    return;
+  }
+  SourceRange ChildrenRange;
+  SourceRange NodeRange = ASTNode.getSourceRange();
+  // find union of all child source ranges;
+  for (const Node *Child : Children) {
+    // Child subtree isn't completely selected.
+    if (!Child->IsSubtreeEntirelySelected) {
+      IsSubtreeEntirelySelected = false;
+      return;
+    }
+    SourceRange ChildRange = Child->ASTNode.getSourceRange();
+    if (ChildrenRange.isInvalid()) {
+      // Initialize the range
+      ChildrenRange = ChildRange;
+      continue;
+    }
+    // unite the ranges.
+    ChildrenRange.setBegin(
+        std::min(ChildrenRange.getBegin(), ChildRange.getBegin()));
+    ChildrenRange.setEnd(std::max(ChildrenRange.getEnd(), ChildRange.getEnd()));
+  }
+  // All children are completely selected.
+  // Check NodeRange isn't outside ChildrenRange.
+  IsSubtreeEntirelySelected =
+      ChildrenRange.isValid() &&
+      !(NodeRange.getBegin() < ChildrenRange.getBegin() ||
+        ChildrenRange.getEnd() < NodeRange.getEnd());
 }
 
 } // namespace clangd

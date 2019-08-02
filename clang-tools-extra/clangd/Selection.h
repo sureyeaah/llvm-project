@@ -102,6 +102,11 @@ public:
     ast_type_traits::DynTypedNode ASTNode;
     // The extent to which this node is covered by the selection.
     Selection Selected;
+    // The extent to which this node's subtree is covered by the selection.
+    // We use this to check the selection type for nodes that are unable to
+    // claim anything because their source range is equal to the union of
+    // their chidren's.
+    bool IsSubtreeEntirelySelected;
     // Walk up the AST to get the DeclContext of this Node,
     // which is not the node itself.
     const DeclContext& getDeclContext() const;
@@ -110,6 +115,7 @@ public:
     // If this node is a wrapper with no syntax (e.g. implicit cast), return
     // its contents. (If multiple wrappers are present, unwraps all of them).
     const Node& ignoreImplicit() const;
+    void checkSubtreeCompletelySelected();
   };
   // The most specific common ancestor of all the selected nodes.
   // Returns nullptr if the common ancestor is the root.

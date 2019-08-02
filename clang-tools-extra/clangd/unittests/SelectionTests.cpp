@@ -346,6 +346,19 @@ TEST(SelectionTest, Selected) {
   }
 }
 
+TEST(SelectionTest, SubtreeSelected) {
+  const char* Test = R"cpp(
+    void f() {
+      ^int a, b;^
+    };
+  )cpp";
+  auto AST = TestTU::withCode(Annotations(Test).code()).build();
+  auto T = makeSelectionTree(Test, AST); 
+  const SelectionTree::Node *DeclStmt = T.commonAncestor();
+  EXPECT_EQ("DeclStmt", nodeKind(DeclStmt));
+  EXPECT_TRUE(DeclStmt->IsSubtreeEntirelySelected);
+}
+
 TEST(SelectionTest, Implicit) {
   const char* Test = R"cpp(
     struct S { S(const char*); };
