@@ -625,14 +625,22 @@ TEST_F(ExtractFunctionTest, FunctionTest) {
   // FIXME: ExtractFunction should be unavailable inside loop construct
   // initalizer/condition.
   EXPECT_THAT(apply(" for([[int i = 0;]];);"), HasSubstr("extracted"));
+  // We should be able to extract break/continue with a parent loop/switch.
+  EXPECT_THAT(apply(" [[for(;;) if(1) break;]] "), HasSubstr("extracted"));
+  EXPECT_THAT(apply(" for(;;) [[while(1) break;]] "), HasSubstr("extracted"));
+  EXPECT_THAT(apply(" [[switch(1) { break; }]]"), HasSubstr("extracted"));
+  EXPECT_THAT(apply(" [[while(1) switch(1) { continue; }]]"),
+              HasSubstr("extracted"));
   // Don't extract because needs hoisting.
   EXPECT_THAT(apply(" [[int a = 5;]] a++; "), StartsWith("fail"));
   // Don't extract return
   EXPECT_THAT(apply(" if(true) [[return;]] "), StartsWith("fail"));
-  // Don't extract break and continue.
-  // FIXME: We should be able to extract this since it's non broken.
-  EXPECT_THAT(apply(" [[for(;;) break;]] "), StartsWith("fail"));
-  EXPECT_THAT(apply(" for(;;) [[continue;]] "), StartsWith("fail"));
+  // Don't extract break and continue without a loop/switch parent.
+  EXPECT_THAT(apply(" for(;;) [[if(1) continue;]] "), StartsWith("fail"));
+  EXPECT_THAT(apply(" while(1) [[if(1) break;]] "), StartsWith("fail"));
+  EXPECT_THAT(apply(" switch(1) { [[break;]] }"), StartsWith("fail"));
+  EXPECT_THAT(apply(" for(;;) { [[while(1) break; break;]] }"),
+              StartsWith("fail"));
 }
 
 TEST_F(ExtractFunctionTest, FileTest) {

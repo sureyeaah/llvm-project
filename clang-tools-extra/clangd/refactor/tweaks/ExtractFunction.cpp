@@ -28,7 +28,6 @@
 //   - Always passed by l-value reference
 // - No return
 // - Cannot move declarations before extracting
-// - Doesn't check for broken control flow
 //
 // 1. ExtractFunction is the tweak subclass
 //    - Prepare does basic analysis of the selection and is therefore fast.
@@ -39,8 +38,9 @@
 //    enclosing function.
 // 3. NewFunction stores properties of the extracted function and provides
 //    methods for rendering it.
-// 4. CapturedZoneInfo uses a RAV to capture information about the extraction
-//    like declarations, existing return statements, broken control flow, etc.
+// 4. CapturedZoneInfo uses a RAV and SelectionTreeVisitor to capture
+//    information about the extraction like declarations, existing return
+//    statements, broken control flow, etc.
 // 5. getExtractedFunction is responsible for analyzing the CapturedZoneInfo and
 //    creating a NewFunction.
 // Design Doc at <TODO: Share design doc>
@@ -55,6 +55,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
+#include "clang/AST/StmtCXX.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
@@ -360,8 +361,8 @@ struct CapturedZoneInfo {
   llvm::DenseMap<const Decl *, DeclInformation> DeclInfoMap;
   // True if there is a return statement in zone.
   bool HasReturnStmt = false;
-  // For now we just care whether there exists a break/continue in zone.
-  bool HasBreakOrContinue = false;
+  // True if extracting break or continue without corresponding loop/switch.
+  bool BrokenControlFlow = false;
   // FIXME: capture TypeAliasDecl and UsingDirectiveDecl
   // FIXME: Capture type information as well.
   // Return reference for a Decl, adding it if not already present.
@@ -403,7 +404,8 @@ CapturedZoneInfo captureZoneInfo(const ExtractionZone &ExtZone) {
   class ExtractionZoneVisitor
       : public clang::RecursiveASTVisitor<ExtractionZoneVisitor> {
   public:
-    ExtractionZoneVisitor(const ExtractionZone &ExtZone) : ExtZone(ExtZone) {
+    ExtractionZoneVisitor(CapturedZoneInfo &Info, const ExtractionZone &ExtZone)
+        : Info(Info), ExtZone(ExtZone) {
       TraverseDecl(const_cast<FunctionDecl *>(
           ExtZone.EnclosingFunction->ASTNode.get<FunctionDecl>()));
     }
@@ -424,12 +426,61 @@ CapturedZoneInfo captureZoneInfo(const ExtractionZone &ExtZone) {
         Info.HasReturnStmt = true;
       return true;
     }
-
-    CapturedZoneInfo Info;
+    CapturedZoneInfo &Info;
     const ExtractionZone &ExtZone;
   };
-  ExtractionZoneVisitor Visitor(ExtZone);
-  return std::move(Visitor.Info);
+
+  class SelectionTreeVisitor {
+    // Returns tuple denoting whether we can Break/Continue out of a node.
+    std::tuple<bool, bool> canHaveBreakContinueAsChild(const Node *N) {
+      const Stmt *S = N->ASTNode.get<Stmt>();
+      bool Break = false;
+      bool Continue = false;
+      // We can break/continue out of a loop
+      if (dyn_cast_or_null<WhileStmt>(S) || dyn_cast_or_null<ForStmt>(S) ||
+          dyn_cast_or_null<CXXForRangeStmt>(S) || dyn_cast_or_null<DoStmt>(S))
+        Break = Continue = true;
+      // We can only break out of a switch
+      else if (dyn_cast_or_null<SwitchStmt>(S))
+        Break = true;
+      return {Break, Continue};
+    }
+    // Perform a depth first traversal of selection tree to look for broken
+    // break/continue in Extraction zone.
+    void traverse(const Node *CurNode) {
+      bool CanHaveBreak, CanHaveContinue;
+      std::tie(CanHaveBreak, CanHaveContinue) =
+          canHaveBreakContinueAsChild(CurNode);
+      BreakParents += CanHaveBreak;
+      ContinueParents += CanHaveContinue;
+      // If we find a break or continue without a corresponding parent that can
+      // have a break/continue inside it, we have broken control flow.
+      if ((CurNode->ASTNode.get<BreakStmt>() && !BreakParents) ||
+          (CurNode->ASTNode.get<ContinueStmt>() && !ContinueParents))
+        Info.BrokenControlFlow = true;
+      for (const Node *ChildNode : CurNode->Children) {
+        traverse(ChildNode);
+      }
+      BreakParents -= CanHaveBreak;
+      ContinueParents -= CanHaveContinue;
+    }
+    // Current number of nodes that can we can break/continue out of.
+    unsigned BreakParents = 0;
+    unsigned ContinueParents = 0;
+    CapturedZoneInfo &Info;
+
+  public:
+    SelectionTreeVisitor(CapturedZoneInfo &Info, const Node *ZoneParent)
+        : Info(Info) {
+      for (const Node *RootStmt : ZoneParent->Children) {
+        traverse(RootStmt);
+      }
+    }
+  };
+  CapturedZoneInfo Info;
+  ExtractionZoneVisitor Visitor(Info, ExtZone);
+  SelectionTreeVisitor SelectionVisitor(Info, ExtZone.Parent);
+  return Info;
 }
 
 // Adds parameters to ExtractedFunc.
@@ -509,9 +560,8 @@ llvm::Optional<NewFunction> getExtractedFunction(ExtractionZone &ExtZone,
                                                  const SourceManager &SM,
                                                  const LangOptions &LangOpts) {
   CapturedZoneInfo CapturedInfo = captureZoneInfo(ExtZone);
-  // Bail out if any break of continue exists
-  // FIXME: check for broken control flow only
-  if (CapturedInfo.HasBreakOrContinue)
+  // Bail out if trying to extract broken control flow
+  if (CapturedInfo.BrokenControlFlow)
     return llvm::None;
   auto SemicolonPolicy = getSemicolonPolicy(ExtZone, SM, LangOpts);
   NewFunction ExtractedFunc(ExtZone.ZoneRange, ExtZone.getInsertionPoint(),
